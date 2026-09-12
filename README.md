@@ -44,8 +44,14 @@ Expected output is a JSON metrics object with `success: true` for the scripted b
 To run the same loop against a running VirtualHome Unity app:
 
 ```bash
-/usr/bin/open -n virtualhome/virtualhome/simulation/unity_simulator/macos_exec.2.2.4.app --args -screen-fullscreen 0 -screen-quality 4
+social_env/bin/python scripts/launch_virtualhome_macos.py --fresh
 social_env/bin/python scripts/run_task_0.py --connect --max-steps 2
+```
+
+To save T's FPV observations for inspection:
+
+```bash
+social_env/bin/python scripts/run_task_0.py --connect --max-steps 2 --save-fpv-dir outputs/task_0_fpv
 ```
 
 The current macOS v2.2.4 executable can return `False` from `reset(...)` even while the scene/API continue working. The adapter records this as `reset_warning` instead of failing by default. Repeated connected runs may accumulate character cameras in that build; restart the Unity app for clean manual experiments.

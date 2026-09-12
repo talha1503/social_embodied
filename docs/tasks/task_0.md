@@ -34,6 +34,12 @@ Connected to running Unity:
 social_env/bin/python scripts/run_task_0.py --connect --max-steps 2
 ```
 
+Connected with FPV debug images:
+
+```bash
+social_env/bin/python scripts/run_task_0.py --connect --max-steps 2 --save-fpv-dir outputs/task_0_fpv
+```
+
 ## Current Metrics
 
 - `success`: whether T selected the intended target object.
