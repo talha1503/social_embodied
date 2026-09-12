@@ -25,3 +25,44 @@ class ScriptedAgent:
             return Action(action_type="wait")
         return self._actions.pop(0)
 
+
+class SocialCueOracleAgent:
+    """Oracle baseline that follows E's explicit gaze/gesture target metadata."""
+
+    name = "social_cue_oracle"
+
+    def reset(self, task_spec: TaskSpec) -> None:
+        self.task_spec = task_spec
+        self._target_id: int | None = None
+        self._object_class: str = "object"
+        self._phase = "move"
+
+    def act(self, observation: Observation) -> Action:
+        if self._target_id is None:
+            for event in observation.events:
+                if event.actor == "E" and event.event_type in {"gesture", "gaze"} and event.target_object_id is not None:
+                    self._target_id = event.target_object_id
+                    break
+
+        if self._target_id is None:
+            return Action(action_type="ask", utterance="Which one do you mean?")
+
+        for obj in observation.visible_objects:
+            if obj.object_id == self._target_id:
+                self._object_class = obj.class_name
+                break
+
+        if self._phase == "move":
+            self._phase = "pick_up"
+            return Action(
+                action_type="move_to",
+                target_object_id=self._target_id,
+                params={"object_class": self._object_class},
+            )
+
+        self._phase = "done"
+        return Action(
+            action_type="pick_up",
+            target_object_id=self._target_id,
+            params={"object_class": self._object_class},
+        )

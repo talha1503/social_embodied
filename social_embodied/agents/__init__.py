@@ -1,7 +1,6 @@
 """Agent implementations."""
 
 from social_embodied.agents.random_agent import RandomAgent
-from social_embodied.agents.scripted import ScriptedAgent
+from social_embodied.agents.scripted import ScriptedAgent, SocialCueOracleAgent
 
-__all__ = ["RandomAgent", "ScriptedAgent"]
-
+__all__ = ["RandomAgent", "ScriptedAgent", "SocialCueOracleAgent"]

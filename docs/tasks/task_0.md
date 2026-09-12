@@ -1,4 +1,58 @@
-# Implementation
+# Task 0: Ambiguous Reference Resolution
+
+## Goal
+
+Evaluate whether Target Agent **T** can convert Environment Agent **E**'s ambiguous language plus social cue into the correct embodied object action.
+
+## Minimal Scenario
+
+E says:
+
+> Can you bring me that mug?
+
+There are at least two candidate objects of the same broad class. E's gaze and/or pointing gesture identifies the intended target. T should move toward and select the target object.
+
+## Current Implementation Status
+
+- Dry-run loop works without Unity.
+- Unity-connected loop can reset/load the scene, add T and E, read the environment graph, discover real candidate objects, select a real target object id, compute T's `FIRST_PERSON` camera index, and execute a two-step oracle baseline.
+- Current oracle baseline reads E's gesture/gaze target metadata and emits:
+  - `move_to(target)`
+  - `pick_up(target)`
+
+## Current Command
+
+Dry run:
+
+```bash
+python3 scripts/run_task_0.py
+```
+
+Connected to running Unity:
+
+```bash
+social_env/bin/python scripts/run_task_0.py --connect --max-steps 2
+```
+
+## Current Metrics
+
+- `success`: whether T selected the intended target object.
+- `selected_object_id`: first object selected by T through `move_to`, `pick_up`, or `give_to`.
+- `target_object_id`: object indicated by E's social cue.
+- `asked_clarification`: whether T asked a clarification question.
+- `action_count`: number of actions taken.
+- `errors`: environment/translation errors seen during execution.
+
+## Next Work
+
+- Replace oracle cue metadata with visual cue observation from FPV.
+- Add real gesture/gaze control on the Unity side.
+- Score final object state, not only target selection.
+- Add distractor variants and hidden/off-camera cue variants.
+
+---
+
+# Original Implementation Notes
 
 ## 1. Agents
 
@@ -146,4 +200,3 @@ Agent **E** should be able to modify its observable behavior through the followi
    1. Any action which could be task related?
 
 ---
-

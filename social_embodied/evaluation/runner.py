@@ -32,10 +32,10 @@ def run_episode(
 ) -> EpisodeResult:
     """Run one task episode using the common environment-agent-scorer loop."""
 
-    agent.reset(task_spec)
-    scorer.reset(task_spec)
-
     observation = env.reset(task_spec)
+    active_task_spec = env.task_spec or task_spec
+    agent.reset(active_task_spec)
+    scorer.reset(active_task_spec)
     observations = [observation]
     actions: list[Action] = []
 
@@ -56,10 +56,9 @@ def run_episode(
 
     metrics = scorer.final_score(observation)
     return EpisodeResult(
-        task_id=task_spec.task_id,
+        task_id=active_task_spec.task_id,
         agent_name=agent.name,
         actions=actions,
         observations=observations,
         metrics=metrics,
     )
-
