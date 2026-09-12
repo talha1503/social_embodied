@@ -1,0 +1,8 @@
+[submodule "virtualhome"]
+	path = virtualhome
+	url = https://github.com/talha1503/virtualhome.git
+	branch = social-embodied-setup
+[submodule "virtualhome_unity"]
+	path = virtualhome_unity
+	url = https://github.com/talha1503/virtualhome_unity.git
+	branch = social-embodied-setup

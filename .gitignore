@@ -1,0 +1,34 @@
+.DS_Store
+
+# Python / local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+social_env/
+
+# Notebook/editor state
+.ipynb_checkpoints/
+.vscode/
+.idea/
+
+# Local outputs
+outputs/
+runs/
+artifacts/
+*.mp4
+*.mov
+
+# Unity-generated files if a project is opened at the repo root by accident
+Library/
+Temp/
+Logs/
+UserSettings/
+obj/
+Build/
+Builds/
+
