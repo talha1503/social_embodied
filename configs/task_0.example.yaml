@@ -1,0 +1,34 @@
+task_id: ambiguous_reference_0000
+task_family: ambiguous_reference
+scene_id: 4
+prompt: E asks T to bring the intended mug, but language alone is ambiguous.
+
+objects:
+  candidates:
+    - id: 101
+      class_name: mug
+      label: mug_left
+    - id: 102
+      class_name: mug
+      label: mug_right
+  target:
+    id: 102
+    class_name: mug
+    label: mug_right
+
+e_behavior:
+  speech: Can you bring me that mug?
+  gaze_target_id: 102
+  gaze_duration: 1.5
+  gesture: point
+  gesture_target_id: 102
+  gesture_duration: 1.0
+  gesture_intensity: 0.8
+
+success:
+  target_object_id: 102
+  acceptable_actions:
+    - pick_up
+    - give_to
+    - move_to
+
