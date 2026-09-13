@@ -41,17 +41,39 @@ python scripts/run_task_0.py
 
 Expected output is a JSON metrics object with `success: true` for the scripted baseline.
 
+The default Task 0 instance lives at:
+
+```text
+benchmark/tasks/task_0/instances/ambiguous_reference_0000.json
+```
+
+Run a specific instance:
+
+```bash
+python3 scripts/run_task_0.py --task-instance benchmark/tasks/task_0/instances/ambiguous_reference_0000.json
+```
+
 To run the same loop against a running VirtualHome Unity app:
 
 ```bash
 social_env/bin/python scripts/launch_virtualhome_macos.py --fresh
-social_env/bin/python scripts/run_task_0.py --connect --max-steps 2
+social_env/bin/python scripts/run_task_0.py --connect --max-steps 2 --debug-run-name task0_manual
 ```
 
-To save T's FPV observations for inspection:
+Connected runs write local debug traces by default:
 
-```bash
-social_env/bin/python scripts/run_task_0.py --connect --max-steps 2 --save-fpv-dir outputs/task_0_fpv
+```text
+debug/<run_name>/
+  trace.json
+  images/
+    obs_000_fpv_00.png
+    obs_000_overview_00.png
+    obs_000_fpv_seg_inst_00.png
+    obs_000_overview_seg_inst_00.png
+  env/
+    obs_000_scene_graph.json
 ```
+
+`trace.json` includes the action timeline, simulator/camera metadata, visible cue scripts, final graph checks, and segmentation-based target/candidate visibility summaries. `debug/` is ignored by git.
 
 The current macOS v2.2.4 executable can return `False` from `reset(...)` even while the scene/API continue working. The adapter records this as `reset_warning` instead of failing by default. Repeated connected runs may accumulate character cameras in that build; restart the Unity app for clean manual experiments.

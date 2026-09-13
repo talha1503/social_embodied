@@ -35,6 +35,8 @@ class VirtualHomeConfig:
     controlled_layout: bool = True
     capture_debug_cameras: bool = True
     use_controlled_fpv_camera: bool = True
+    capture_segmentation: bool = True
+    segmentation_color_tolerance: int = 3
 
 
 class SocialEmbodiedEnv:
@@ -59,6 +61,7 @@ class SocialEmbodiedEnv:
         self.t_fpv_camera_index: int | None = None
         self.controlled_fpv_camera_index: int | None = None
         self.overview_camera_index: int | None = None
+        self.instance_color_map: dict[str, Any] = {}
         self.reset_warning: str | None = None
         self.layout_metadata: dict[str, Any] = {}
 
@@ -96,6 +99,7 @@ class SocialEmbodiedEnv:
         self.t_fpv_camera_index = None
         self.controlled_fpv_camera_index = None
         self.overview_camera_index = None
+        self.instance_color_map = {}
         self.reset_warning = None
         self.layout_metadata = {}
 
@@ -117,10 +121,11 @@ class SocialEmbodiedEnv:
                 if success:
                     self.scene_graph = graph
 
-            if task_spec.task_family == "ambiguous_reference":
-                self.task_spec = self._materialize_ambiguous_reference(task_spec)
-                if self.config.controlled_layout:
-                    self._apply_controlled_layout()
+        if task_spec.task_family == "ambiguous_reference":
+            self.task_spec = self._materialize_ambiguous_reference(task_spec)
+            self.task_spec = self._resolve_symbolic_task_references(self.task_spec)
+            if self.config.controlled_layout:
+                self._apply_controlled_layout()
 
         self.events = self._initial_events(self.task_spec)
 
@@ -143,15 +148,26 @@ class SocialEmbodiedEnv:
 
         self.executed_scripts.append(script)
         if script and self.comm is not None:
-            success, message = self.comm.render_script(script, recording=False, skip_animation=True)
+            try:
+                success, message = self.comm.render_script(script, recording=False, skip_animation=True)
+            except Exception as exc:
+                message = f"Unity render_script failed: {exc}"
+                obs = self._observe(metadata={"error": message, "script": script})
+                return StepResult(observation=obs, done=True, reward=0.0, info={"error": message, "script": script})
             if not success:
                 obs = self._observe(metadata={"error": message, "script": script})
                 return StepResult(observation=obs, done=True, reward=0.0, info={"error": message, "script": script})
 
             if self.config.use_scene_graph:
-                graph_success, graph = self.comm.environment_graph()
-                if graph_success:
-                    self.scene_graph = graph
+                try:
+                    graph_success, graph = self.comm.environment_graph()
+                except Exception as exc:
+                    message = f"Unity environment_graph failed after script: {exc}"
+                    obs = self._observe(metadata={"error": message, "script": script})
+                    return StepResult(observation=obs, done=True, reward=0.0, info={"error": message, "script": script})
+                else:
+                    if graph_success:
+                        self.scene_graph = graph
 
         obs = self._observe(metadata={"script": script})
         return StepResult(observation=obs, done=False, reward=None, info={"script": script})
@@ -165,6 +181,7 @@ class SocialEmbodiedEnv:
         assert self.task_spec is not None
         fpv_images = self._capture_fpv_images()
         debug_images = self._capture_debug_images()
+        visibility = self._visibility_metadata(debug_images)
         return build_observation(
             step_id=self.step_id,
             task_spec=self.task_spec,
@@ -173,7 +190,7 @@ class SocialEmbodiedEnv:
             fpv_images=fpv_images,
             debug_images=debug_images,
             scene_graph=self.scene_graph,
-            metadata=self._observation_metadata(metadata),
+            metadata=self._observation_metadata(metadata, visibility=visibility),
         )
 
     def _setup_characters(self) -> None:
@@ -189,12 +206,12 @@ class SocialEmbodiedEnv:
 
         # Character order matters for scripts: T is char0, E is char1.
         self.comm.add_character(
-            self.config.target_character,
-            initial_room=self.config.target_initial_room,
+            self._agent_config("target", "character", self.config.target_character),
+            initial_room=self._agent_config("target", "initial_room", self.config.target_initial_room),
         )
         self.comm.add_character(
-            self.config.environment_character,
-            initial_room=self.config.environment_initial_room,
+            self._agent_config("environment", "character", self.config.environment_character),
+            initial_room=self._agent_config("environment", "initial_room", self.config.environment_initial_room),
         )
 
         self.t_fpv_camera_index = self._character_camera_index(character_index=0, camera_name=self.config.camera_mode)
@@ -226,33 +243,76 @@ class SocialEmbodiedEnv:
     def _capture_fpv_images(self) -> list[Any]:
         if not self.config.capture_fpv or self.comm is None:
             return []
-        camera_index = self.controlled_fpv_camera_index or self.t_fpv_camera_index
+        camera_index = self._fpv_camera_index()
         if camera_index is None:
             return []
-        success, images = self.comm.camera_image(
-            [camera_index],
-            mode="normal",
-            image_width=self.config.image_width,
-            image_height=self.config.image_height,
-        )
+        try:
+            success, images = self.comm.camera_image(
+                [camera_index],
+                mode="normal",
+                image_width=self.config.image_width,
+                image_height=self.config.image_height,
+            )
+        except Exception:
+            return []
         if not success:
             return []
         return images
 
     def _capture_debug_images(self) -> dict[str, list[Any]]:
-        if not self.config.capture_debug_cameras or self.comm is None or self.overview_camera_index is None:
+        if self.comm is None:
             return {}
-        success, images = self.comm.camera_image(
-            [self.overview_camera_index],
-            mode="normal",
-            image_width=self.config.image_width,
-            image_height=self.config.image_height,
-        )
-        if not success:
-            return {}
-        return {"overview": images}
+        debug_images: dict[str, list[Any]] = {}
+        if self.config.capture_debug_cameras and self.overview_camera_index is not None:
+            try:
+                success, images = self.comm.camera_image(
+                    [self.overview_camera_index],
+                    mode="normal",
+                    image_width=self.config.image_width,
+                    image_height=self.config.image_height,
+                )
+            except Exception:
+                success, images = False, []
+            if success:
+                debug_images["overview"] = images
 
-    def _observation_metadata(self, metadata: dict[str, Any] | None) -> dict[str, Any]:
+        if self.config.capture_segmentation:
+            fpv_camera_index = self._fpv_camera_index()
+            if fpv_camera_index is not None:
+                try:
+                    success, images = self.comm.camera_image(
+                        [fpv_camera_index],
+                        mode="seg_inst",
+                        image_width=self.config.image_width,
+                        image_height=self.config.image_height,
+                    )
+                except Exception:
+                    success, images = False, []
+                if success:
+                    debug_images["fpv_seg_inst"] = images
+            if self.overview_camera_index is not None:
+                try:
+                    success, images = self.comm.camera_image(
+                        [self.overview_camera_index],
+                        mode="seg_inst",
+                        image_width=self.config.image_width,
+                        image_height=self.config.image_height,
+                    )
+                except Exception:
+                    success, images = False, []
+                if success:
+                    debug_images["overview_seg_inst"] = images
+        return debug_images
+
+    def _fpv_camera_index(self) -> int | None:
+        return self.controlled_fpv_camera_index or self.t_fpv_camera_index
+
+    def _observation_metadata(
+        self,
+        metadata: dict[str, Any] | None,
+        *,
+        visibility: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         result = dict(metadata or {})
         result.update(
             {
@@ -264,19 +324,133 @@ class SocialEmbodiedEnv:
                 "executed_scripts": copy.deepcopy(self.executed_scripts),
                 "reset_warning": self.reset_warning,
                 "layout": copy.deepcopy(self.layout_metadata),
+                "visibility": visibility or {},
             }
         )
         return result
 
+    def _visibility_metadata(self, debug_images: dict[str, list[Any]]) -> dict[str, Any]:
+        if self.comm is None or self.task_spec is None:
+            return {}
+        seg_images = {
+            "fpv": debug_images.get("fpv_seg_inst", []),
+            "overview": debug_images.get("overview_seg_inst", []),
+        }
+        if not any(seg_images.values()):
+            return {}
+
+        instance_colors = self._instance_colors()
+        if not instance_colors:
+            return {}
+
+        target = self.task_spec.objects.get("target", {})
+        candidates = self.task_spec.objects.get("candidates", [])
+        objects = []
+        seen_ids = set()
+        for item in [target, *candidates]:
+            object_id = item.get("id")
+            if object_id is None or int(object_id) in seen_ids:
+                continue
+            seen_ids.add(int(object_id))
+            objects.append(
+                {
+                    "id": int(object_id),
+                    "class_name": item.get("class_name"),
+                    "role": "target" if object_id == target.get("id") else "candidate",
+                }
+            )
+
+        per_object = []
+        for item in objects:
+            color = instance_colors.get(str(item["id"]))
+            pixels = {
+                channel: self._count_instance_pixels(images, color)
+                for channel, images in seg_images.items()
+            }
+            per_object.append(
+                {
+                    **item,
+                    "pixels": pixels,
+                    "visible_in_fpv": pixels.get("fpv", 0) > 0,
+                    "visible_in_overview": pixels.get("overview", 0) > 0,
+                }
+            )
+
+        target_record = next((item for item in per_object if item["role"] == "target"), None)
+        candidate_records = [item for item in per_object if item["role"] == "candidate"]
+        return {
+            "per_object": per_object,
+            "target_visible_in_fpv": bool(target_record and target_record["visible_in_fpv"]),
+            "target_visible_in_overview": bool(target_record and target_record["visible_in_overview"]),
+            "num_candidates_visible_in_fpv": sum(1 for item in candidate_records if item["visible_in_fpv"]),
+            "num_candidates_visible_in_overview": sum(1 for item in candidate_records if item["visible_in_overview"]),
+        }
+
+    def _instance_colors(self) -> dict[str, Any]:
+        if self.instance_color_map or self.comm is None:
+            return self.instance_color_map
+        try:
+            success, colors = self.comm.instance_colors()
+        except Exception:
+            return {}
+        if success:
+            self.instance_color_map = colors
+        return self.instance_color_map
+
+    def _count_instance_pixels(self, images: list[Any], color: Any) -> int:
+        if not images or not color:
+            return 0
+        try:
+            import numpy as np
+        except ImportError:
+            return 0
+
+        rgb = np.asarray([float(color[0]), float(color[1]), float(color[2])]) * 255.0
+        bgr = rgb[::-1]
+        total = 0
+        tolerance = self.config.segmentation_color_tolerance
+        for image in images:
+            arr = np.asarray(image)
+            if arr.ndim != 3 or arr.shape[-1] < 3:
+                continue
+            arr = arr[:, :, :3].astype(float)
+            rgb_match = np.all(np.abs(arr - rgb) <= tolerance, axis=-1)
+            bgr_match = np.all(np.abs(arr - bgr) <= tolerance, axis=-1)
+            total += int(np.count_nonzero(rgb_match | bgr_match))
+        return total
+
     def _materialize_ambiguous_reference(self, task_spec: TaskSpec) -> TaskSpec:
-        candidates = self._find_candidate_objects(["mug", "cup", "waterglass", "wineglass", "juiceglass"])
+        selection = task_spec.metadata.get("object_selection", {})
+        selected = self._select_fixed_candidates(selection)
+        if selected:
+            return self._task_with_selected_candidates(task_spec, selected, selection)
+
+        candidate_classes = selection.get("candidate_classes", ["mug", "cup", "waterglass", "wineglass", "juiceglass"])
+        fallback_classes = selection.get("fallback_classes", ["book", "remotecontrol", "cellphone", "apple"])
+        candidates = self._find_candidate_objects([str(item) for item in candidate_classes])
         if len(candidates) < 2:
-            candidates = self._find_candidate_objects(["book", "remotecontrol", "cellphone", "apple"])
+            candidates = self._find_candidate_objects([str(item) for item in fallback_classes])
         if len(candidates) < 2:
             return task_spec
 
-        selected = self._select_nearby_pair(candidates)
-        target = selected[-1]
+        selected = self._select_candidate_pair(candidates, selection)
+        return self._task_with_selected_candidates(task_spec, selected, selection)
+
+    def _task_with_selected_candidates(
+        self,
+        task_spec: TaskSpec,
+        selected: list[dict[str, Any]],
+        selection: dict[str, Any],
+    ) -> TaskSpec:
+        target_index = int(selection.get("target_index", len(selected) - 1))
+        target_id_config = selection.get("target_id")
+        if target_id_config is not None:
+            for idx, node in enumerate(selected):
+                if int(node["id"]) == int(target_id_config):
+                    target_index = idx
+                    break
+        target_index = max(0, min(target_index, len(selected) - 1))
+        target = selected[target_index]
         target_id = int(target["id"])
 
         objects = {
@@ -302,6 +476,37 @@ class SocialEmbodiedEnv:
         }
         return replace(task_spec, objects=objects, e_behavior=e_behavior, success=success)
 
+    def _select_fixed_candidates(self, selection: dict[str, Any]) -> list[dict[str, Any]]:
+        if selection.get("mode") != "fixed_ids" or not self.scene_graph:
+            return []
+        candidate_ids = [int(item) for item in selection.get("candidate_ids", [])]
+        if len(candidate_ids) < 2:
+            return []
+        nodes_by_id = {
+            int(node["id"]): node
+            for node in self.scene_graph.get("nodes", [])
+            if node.get("id") is not None
+        }
+        selected = [nodes_by_id[item] for item in candidate_ids if item in nodes_by_id]
+        return selected if len(selected) >= 2 else []
+
+    def _resolve_symbolic_task_references(self, task_spec: TaskSpec) -> TaskSpec:
+        target = task_spec.objects.get("target", {})
+        target_id = target.get("id")
+        if target_id is None:
+            return task_spec
+
+        e_behavior = dict(task_spec.e_behavior)
+        for key in ("gaze_target_id", "gesture_target_id"):
+            if e_behavior.get(key) == "target":
+                e_behavior[key] = int(target_id)
+
+        success = dict(task_spec.success)
+        if success.get("target_object_id") is None:
+            success["target_object_id"] = int(target_id)
+
+        return replace(task_spec, e_behavior=e_behavior, success=success)
+
     def _find_candidate_objects(self, class_names: list[str]) -> list[dict[str, Any]]:
         if not self.scene_graph:
             return []
@@ -313,7 +518,16 @@ class SocialEmbodiedEnv:
         candidates.sort(key=lambda node: (str(node.get("class_name")), int(node.get("id"))))
         return candidates
 
-    def _select_nearby_pair(self, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _select_candidate_pair(
+        self,
+        candidates: list[dict[str, Any]],
+        selection: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        selection = selection or {}
+        mode = selection.get("mode", "auto_nearby_pair")
+        if mode not in {"auto_nearby_pair", "fixed_ids"}:
+            raise ValueError(f"Unsupported object_selection mode: {mode}")
+
         same_class_pairs: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
         any_pairs: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
         for idx, left in enumerate(candidates):
@@ -324,7 +538,9 @@ class SocialEmbodiedEnv:
                 if left.get("class_name") == right.get("class_name"):
                     same_class_pairs.append(pair)
 
-        pairs = same_class_pairs or any_pairs
+        pairs = same_class_pairs if selection.get("require_same_class", True) else same_class_pairs or any_pairs
+        if not pairs and selection.get("require_same_class", True):
+            pairs = any_pairs
         if not pairs:
             return candidates[:2]
         _, left, right = min(pairs, key=lambda item: item[0])
@@ -358,22 +574,30 @@ class SocialEmbodiedEnv:
             sum(pos[2] for pos in centers) / len(centers),
         ]
 
-        t_pos = [center[0], 0.0, center[2] + 1.8]
-        e_pos = [center[0] + 1.4, 0.0, center[2] + 0.7]
+        layout = self.task_spec.metadata.get("layout", {})
+        t_offset = self._vector_config(layout, "target_agent_offset", [0.0, 0.0, 1.8])
+        e_offset = self._vector_config(layout, "environment_agent_offset", [1.4, 0.0, 0.7])
+
+        t_pos = [center[0] + t_offset[0], t_offset[1], center[2] + t_offset[2]]
+        e_pos = [center[0] + e_offset[0], e_offset[1], center[2] + e_offset[2]]
 
         t_move_success = self.comm.move_character(0, t_pos)
         e_move_success = self.comm.move_character(1, e_pos)
 
-        orient_script = [
-            f"<char0> [lookat] <{target_class}> ({target_id}) | <char1> [lookat] <{target_class}> ({target_id})"
-        ]
-        orient_success, orient_message = self.comm.render_script(
-            orient_script,
-            recording=False,
-            skip_animation=True,
-            image_synthesis=[],
-            processing_time_limit=20,
-        )
+        orient_script = []
+        orient_success = None
+        orient_message = None
+        if layout.get("orient_agents_to_target", True):
+            orient_script = [
+                f"<char0> [lookat] <{target_class}> ({target_id}) | <char1> [lookat] <{target_class}> ({target_id})"
+            ]
+            orient_success, orient_message = self.comm.render_script(
+                orient_script,
+                recording=False,
+                skip_animation=True,
+                image_synthesis=[],
+                processing_time_limit=20,
+            )
 
         self.layout_metadata = {
             "candidate_ids": [item.get("id") for item in candidates],
@@ -389,33 +613,51 @@ class SocialEmbodiedEnv:
             "orient_message": orient_message,
         }
 
-        if self.config.capture_debug_cameras:
+        self._apply_visible_social_cues(target_class=str(target_class), target_id=int(target_id))
+
+        overview_config = layout.get("overview_camera", {})
+        if self.config.capture_debug_cameras and overview_config.get("enabled", True):
             self._add_overview_camera(center)
-        if self.config.use_controlled_fpv_camera:
-            self._add_controlled_fpv_camera(t_pos, self._node_center(target_node))
+        fpv_config = layout.get("controlled_fpv_camera", {})
+        if self.config.use_controlled_fpv_camera and fpv_config.get("enabled", True):
+            self._add_controlled_fpv_camera(t_pos, self._node_center(target_node), center)
 
         if self.config.use_scene_graph:
             graph_success, graph = self.comm.environment_graph()
             if graph_success:
                 self.scene_graph = graph
 
-    def _add_controlled_fpv_camera(self, t_position: list[float], target_center: list[float]) -> None:
+    def _add_controlled_fpv_camera(
+        self,
+        t_position: list[float],
+        target_center: list[float],
+        candidate_center: list[float],
+    ) -> None:
         if self.comm is None:
             return
         success, camera_count = self.comm.camera_count()
         if not success:
             return
         self.controlled_fpv_camera_index = int(camera_count)
-        camera_pos = [t_position[0], 1.45, t_position[2]]
-        rotation = self._look_at_euler(camera_pos, target_center)
+        fpv_config = self.task_spec.metadata.get("layout", {}).get("controlled_fpv_camera", {}) if self.task_spec else {}
+        camera_height = float(fpv_config.get("height", 1.45))
+        field_view = float(fpv_config.get("field_view", 70))
+        camera_pos = [t_position[0], camera_height, t_position[2]]
+        if fpv_config.get("look_at") == "candidate_center":
+            look_at_height = float(fpv_config.get("look_at_height", 0.85))
+            look_at = [candidate_center[0], look_at_height, candidate_center[2]]
+        else:
+            look_at = target_center
+        rotation = self._look_at_euler(camera_pos, look_at)
         add_success, add_message = self.comm.add_camera(
             position=camera_pos,
             rotation=rotation,
-            field_view=70,
+            field_view=field_view,
         )
         self.layout_metadata["controlled_fpv_camera"] = {
             "index": self.controlled_fpv_camera_index,
             "position": camera_pos,
+            "look_at": look_at,
             "rotation": rotation,
             "success": add_success,
             "message": add_message,
@@ -424,16 +666,22 @@ class SocialEmbodiedEnv:
     def _add_overview_camera(self, center: list[float]) -> None:
         if self.comm is None:
             return
+        layout = self.task_spec.metadata.get("layout", {}) if self.task_spec else {}
+        overview_config = layout.get("overview_camera", {})
         success, camera_count = self.comm.camera_count()
         if not success:
             return
         self.overview_camera_index = int(camera_count)
-        camera_pos = [center[0], 4.0, center[2] + 3.2]
-        rotation = self._look_at_euler(camera_pos, [center[0], 1.0, center[2]])
+        offset = self._vector_config(overview_config, "offset", [0.0, 4.0, 3.2])
+        look_at_offset = self._vector_config(overview_config, "look_at_offset", [0.0, 1.0, 0.0])
+        field_view = float(overview_config.get("field_view", 65))
+        camera_pos = [center[0] + offset[0], center[1] + offset[1], center[2] + offset[2]]
+        look_at = [center[0] + look_at_offset[0], center[1] + look_at_offset[1], center[2] + look_at_offset[2]]
+        rotation = self._look_at_euler(camera_pos, look_at)
         add_success, add_message = self.comm.add_camera(
             position=camera_pos,
             rotation=rotation,
-            field_view=65,
+            field_view=field_view,
         )
         self.layout_metadata["overview_camera"] = {
             "index": self.overview_camera_index,
@@ -442,6 +690,52 @@ class SocialEmbodiedEnv:
             "success": add_success,
             "message": add_message,
         }
+
+    def _apply_visible_social_cues(self, *, target_class: str, target_id: int) -> None:
+        if self.comm is None or self.task_spec is None:
+            return
+
+        cue_scripts: list[dict[str, str]] = []
+        if self.task_spec.e_behavior.get("gaze_visible"):
+            cue_scripts.append({"cue": "gaze", "script": f"<char1> [lookat] <{target_class}> ({target_id})"})
+
+        gesture = str(self.task_spec.e_behavior.get("gesture") or "").lower()
+        if self.task_spec.e_behavior.get("gesture_visible") and gesture in {"point", "pointat", "point_at"}:
+            cue_scripts.append({"cue": "gesture", "script": f"<char1> [pointat] <{target_class}> ({target_id})"})
+
+        if not cue_scripts:
+            self.layout_metadata["visible_social_cues"] = {"records": [], "success": None}
+            return
+
+        records = []
+        for cue_script in cue_scripts:
+            success, message = self.comm.render_script(
+                [cue_script["script"]],
+                recording=False,
+                skip_animation=True,
+                image_synthesis=[],
+                processing_time_limit=20,
+            )
+            records.append({**cue_script, "success": success, "message": message})
+
+        self.layout_metadata["visible_social_cues"] = {
+            "records": records,
+            "success": all(record["success"] for record in records),
+        }
+
+    def _agent_config(self, agent_role: str, key: str, default: str) -> str:
+        if self.task_spec is None:
+            return default
+        agents = self.task_spec.metadata.get("agents", {})
+        agent = agents.get(agent_role, {}) if isinstance(agents, dict) else {}
+        return str(agent.get(key, default))
+
+    @staticmethod
+    def _vector_config(config: dict[str, Any], key: str, default: list[float]) -> list[float]:
+        value = config.get(key, default) if isinstance(config, dict) else default
+        if not isinstance(value, (list, tuple)) or len(value) != 3:
+            return default
+        return [float(value[0]), float(value[1]), float(value[2])]
 
     @staticmethod
     def _node_center(node: dict[str, Any]) -> list[float]:

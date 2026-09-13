@@ -54,6 +54,7 @@ def write_episode_trace(result: Any, output_root: Path, *, run_name: str | None 
         "task_id": result.task_id,
         "agent_name": result.agent_name,
         "run_dir": str(run_dir),
+        "summary": _trace_summary(result, observations, saved_images, saved_env),
         "task": _task_from_observations(result),
         "metrics": _jsonable(result.metrics),
         "actions": _jsonable(result.actions),
@@ -146,6 +147,70 @@ def _task_from_observations(result: Any) -> dict[str, Any]:
         "layout": _jsonable(final_metadata.get("layout", {})),
         "reset_warning": final_metadata.get("reset_warning"),
     }
+
+
+def _trace_summary(
+    result: Any,
+    observations: list[dict[str, Any]],
+    saved_images: list[str],
+    saved_env: list[str],
+) -> dict[str, Any]:
+    final_observation = result.observations[-1] if result.observations else None
+    initial_observation = result.observations[0] if result.observations else None
+    final_metadata = final_observation.metadata if final_observation is not None else {}
+    initial_metadata = initial_observation.metadata if initial_observation is not None else {}
+    layout = final_metadata.get("layout", {})
+    visibility = initial_metadata.get("visibility", {})
+    return {
+        "num_observations": len(result.observations),
+        "num_actions": len(result.actions),
+        "num_saved_images": len(saved_images),
+        "num_saved_env_graphs": len(saved_env),
+        "image_channels": _image_channel_counts(observations),
+        "action_timeline": [
+            {
+                "index": idx,
+                "actor": action.actor,
+                "action_type": action.action_type,
+                "target_object_id": action.target_object_id,
+                "params": _jsonable(action.params),
+            }
+            for idx, action in enumerate(result.actions)
+        ],
+        "target": {
+            "id": result.metrics.get("target_object_id"),
+            "selected_id": result.metrics.get("selected_object_id"),
+            "class_name": layout.get("target_class"),
+            "candidate_ids": layout.get("candidate_ids", []),
+        },
+        "simulator": {
+            "reset_warning": final_metadata.get("reset_warning"),
+            "errors": result.metrics.get("errors", []),
+            "static_camera_count": final_metadata.get("static_camera_count"),
+            "t_fpv_camera_index": final_metadata.get("t_fpv_camera_index"),
+            "controlled_fpv_camera_index": final_metadata.get("controlled_fpv_camera_index"),
+            "overview_camera_index": final_metadata.get("overview_camera_index"),
+        },
+        "layout": {
+            "move_character_success": layout.get("move_character_success"),
+            "orient_success": layout.get("orient_success"),
+            "visible_social_cues": layout.get("visible_social_cues"),
+        },
+        "initial_visibility": {
+            "target_visible_in_fpv": visibility.get("target_visible_in_fpv"),
+            "target_visible_in_overview": visibility.get("target_visible_in_overview"),
+            "num_candidates_visible_in_fpv": visibility.get("num_candidates_visible_in_fpv"),
+            "num_candidates_visible_in_overview": visibility.get("num_candidates_visible_in_overview"),
+        },
+    }
+
+
+def _image_channel_counts(observations: list[dict[str, Any]]) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for observation in observations:
+        for image in observation["images"]:
+            counts[image["channel"]] += 1
+    return dict(sorted(counts.items()))
 
 
 def _scene_graph_summary(scene_graph: dict[str, Any] | None) -> dict[str, Any]:

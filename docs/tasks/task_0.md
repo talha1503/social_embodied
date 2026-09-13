@@ -15,7 +15,13 @@ There are at least two candidate objects of the same broad class. E's gaze and/o
 ## Current Implementation Status
 
 - Dry-run loop works without Unity.
-- Unity-connected loop can reset/load the scene, add T and E, read the environment graph, discover real candidate objects, select a real target object id, compute T's `FIRST_PERSON` camera index, and execute a two-step oracle baseline.
+- The default task instance is JSON-backed:
+  - `benchmark/tasks/task_0/instances/ambiguous_reference_0000.json`
+- Unity-connected loop can reset/load the scene, add T and E from the instance, read the environment graph, discover real candidate objects, select a real target object id, place T/E in a controlled layout, add a stable T-eye FPV camera, add an overview camera, and execute a two-step oracle baseline.
+- The backend now applies first-pass visible social cues with VirtualHome primitives:
+  - `<char1> [lookat] <object> (id)`
+  - `<char1> [pointat] <object> (id)`
+  - each cue is logged separately because `pointat` is not fully reliable for every object/viewpoint in the current VirtualHome build
 - Current oracle baseline reads E's gesture/gaze target metadata and emits:
   - `move_to(target)`
   - `pick_up(target)`
@@ -34,25 +40,65 @@ Connected to running Unity:
 social_env/bin/python scripts/run_task_0.py --connect --max-steps 2
 ```
 
-Connected with FPV debug images:
+Connected with a named local debug trace:
 
 ```bash
-social_env/bin/python scripts/run_task_0.py --connect --max-steps 2 --save-fpv-dir outputs/task_0_fpv
+social_env/bin/python scripts/run_task_0.py --connect --max-steps 2 --debug-run-name task0_manual
+```
+
+Load a specific instance:
+
+```bash
+social_env/bin/python scripts/run_task_0.py \
+  --connect \
+  --max-steps 2 \
+  --task-instance benchmark/tasks/task_0/instances/ambiguous_reference_0000.json
 ```
 
 ## Current Metrics
 
 - `success`: whether T selected the intended target object.
-- `selected_object_id`: first object selected by T through `move_to`, `pick_up`, or `give_to`.
+- `selected_object_id`: first object selected by T through an acceptable task action, currently `pick_up` or `give_to`.
 - `target_object_id`: object indicated by E's social cue.
 - `asked_clarification`: whether T asked a clarification question.
 - `action_count`: number of actions taken.
 - `errors`: environment/translation errors seen during execution.
+- `final_target_held_by_T`: whether the final scene graph has a `HOLDS_RH`/`HOLDS_LH` edge from T to the target.
+
+## Debug Trace Layout
+
+Each run writes:
+
+```text
+debug/<run_name>/
+  trace.json
+  images/
+    obs_000_fpv_00.png
+    obs_000_overview_00.png
+    obs_000_fpv_seg_inst_00.png
+    obs_000_overview_seg_inst_00.png
+    obs_001_fpv_00.png
+    obs_001_overview_00.png
+  env/
+    obs_000_scene_graph.json
+    obs_001_scene_graph.json
+```
+
+`trace.json` contains a compact summary, action timeline, social events, camera ids, object ids, placement metadata, cue scripts, metrics, object visibility checks, and paths to the images/full scene graphs.
+
+The current visibility checks use VirtualHome `seg_inst` images plus `instance_colors()`:
+
+- `target_visible_in_fpv`
+- `target_visible_in_overview`
+- `num_candidates_visible_in_fpv`
+- `num_candidates_visible_in_overview`
+
+The top-level trace summary reports these under `initial_visibility`, because the key benchmark question is what T could see before acting.
 
 ## Next Work
 
 - Replace oracle cue metadata with visual cue observation from FPV.
-- Add real gesture/gaze control on the Unity side.
+- Replace VirtualHome's built-in `pointat` with custom Unity/Mixamo gesture clips once we need stronger visible gestures.
 - Score final object state, not only target selection.
 - Add distractor variants and hidden/off-camera cue variants.
 

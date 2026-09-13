@@ -34,7 +34,8 @@ class SocialCueOracleAgent:
     def reset(self, task_spec: TaskSpec) -> None:
         self.task_spec = task_spec
         self._target_id: int | None = None
-        self._object_class: str = "object"
+        target = task_spec.objects.get("target", {})
+        self._object_class: str = str(target.get("class_name", "object"))
         self._phase = "move"
 
     def act(self, observation: Observation) -> Action:

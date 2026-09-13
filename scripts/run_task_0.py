@@ -14,13 +14,18 @@ from social_embodied.agents import SocialCueOracleAgent
 from social_embodied.debugging import write_episode_trace
 from social_embodied.envs import SocialEmbodiedEnv, VirtualHomeConfig
 from social_embodied.evaluation import run_episode
-from social_embodied.tasks import AmbiguousReferenceScorer, build_task_0_spec
+from social_embodied.tasks import AmbiguousReferenceScorer, build_task_0_spec, load_task_spec
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run Task 0 ambiguous reference baseline.")
     parser.add_argument("--connect", action="store_true", help="Connect to a running VirtualHome Unity simulator.")
     parser.add_argument("--port", default="8080", help="Unity simulator HTTP port.")
+    parser.add_argument(
+        "--task-instance",
+        type=Path,
+        help="Path to a JSON task instance. Defaults to benchmark/tasks/task_0/instances/ambiguous_reference_0000.json.",
+    )
     parser.add_argument("--no-fpv", action="store_true", help="Disable FPV image capture.")
     parser.add_argument("--debug-dir", type=Path, default=Path("debug"), help="Root directory for local debug traces.")
     parser.add_argument("--debug-run-name", help="Optional debug run folder name.")
@@ -32,7 +37,7 @@ def main() -> None:
     parser.add_argument("--max-steps", type=int, default=10)
     args = parser.parse_args()
 
-    task_spec = build_task_0_spec()
+    task_spec = load_task_spec(args.task_instance) if args.task_instance else build_task_0_spec()
     agent = SocialCueOracleAgent()
     env = SocialEmbodiedEnv(
         VirtualHomeConfig(

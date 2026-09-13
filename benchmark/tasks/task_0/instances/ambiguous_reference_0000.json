@@ -1,0 +1,90 @@
+{
+  "task_id": "ambiguous_reference_0000",
+  "task_family": "ambiguous_reference",
+  "scene_id": 4,
+  "prompt": "E asks T to bring the intended object, but language alone is ambiguous. T must use E's gaze and pointing cue.",
+  "objects": {
+    "candidates": [
+      {
+        "id": 435,
+        "class_name": "book",
+        "label": "dry_run_left"
+      },
+      {
+        "id": 437,
+        "class_name": "book",
+        "label": "dry_run_right"
+      }
+    ],
+    "target": {
+      "id": 437,
+      "class_name": "book",
+      "label": "dry_run_right"
+    }
+  },
+  "agents": {
+    "target": {
+      "agent_id": "T",
+      "character": "Chars/Male1",
+      "initial_room": "kitchen"
+    },
+    "environment": {
+      "agent_id": "E",
+      "character": "Chars/Female2",
+      "initial_room": "livingroom"
+    }
+  },
+  "object_selection": {
+    "mode": "fixed_ids",
+    "candidate_ids": [435, 437],
+    "target_id": 437,
+    "candidate_classes": ["book", "wineglass", "waterglass", "mug", "cup", "juiceglass"],
+    "fallback_classes": ["book", "remotecontrol", "cellphone", "apple"],
+    "require_same_class": true,
+    "target_index": 1
+  },
+  "layout": {
+    "mode": "controlled_pair",
+    "target_agent_offset": [0.0, 0.0, 2.8],
+    "environment_agent_offset": [-2.5, 0.0, 1.2],
+    "orient_agents_to_target": true,
+    "controlled_fpv_camera": {
+      "enabled": true,
+      "height": 1.45,
+      "look_at": "candidate_center",
+      "look_at_height": 0.85,
+      "field_view": 100
+    },
+    "overview_camera": {
+      "enabled": true,
+      "offset": [0.0, 4.0, 3.2],
+      "look_at_offset": [0.0, 1.0, 0.0],
+      "field_view": 65
+    }
+  },
+  "e_behavior": {
+    "speech": "Can you bring me that one?",
+    "gaze": {
+      "target": "target",
+      "visible": true,
+      "duration": 1.5
+    },
+    "gesture": {
+      "type": "pointat",
+      "target": "target",
+      "visible": true,
+      "duration": 1.0,
+      "intensity": 0.8
+    }
+  },
+  "success": {
+    "target_object_id": null,
+    "acceptable_actions": ["pick_up", "give_to"],
+    "require_final_hold": true
+  },
+  "metadata": {
+    "requires": ["fpv", "speech", "gaze", "gesture", "object_interaction"],
+    "split": "dev",
+    "notes": "Scene 4 fixed ids are used for the default dev seed so initial FPV visibility and final object interaction are reproducible."
+  }
+}
