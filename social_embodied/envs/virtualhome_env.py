@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import replace
+import math
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,9 @@ class VirtualHomeConfig:
     environment_initial_room: str = "livingroom"
     capture_fpv: bool = True
     strict_reset: bool = False
+    controlled_layout: bool = True
+    capture_debug_cameras: bool = True
+    use_controlled_fpv_camera: bool = True
 
 
 class SocialEmbodiedEnv:
@@ -52,7 +56,10 @@ class SocialEmbodiedEnv:
         self.static_camera_count: int | None = None
         self.character_camera_names: list[str] = []
         self.t_fpv_camera_index: int | None = None
+        self.controlled_fpv_camera_index: int | None = None
+        self.overview_camera_index: int | None = None
         self.reset_warning: str | None = None
+        self.layout_metadata: dict[str, Any] = {}
 
     def connect(self) -> None:
         """Create a UnityCommunication client if configured to use Unity."""
@@ -86,7 +93,10 @@ class SocialEmbodiedEnv:
         self.static_camera_count = None
         self.character_camera_names = []
         self.t_fpv_camera_index = None
+        self.controlled_fpv_camera_index = None
+        self.overview_camera_index = None
         self.reset_warning = None
+        self.layout_metadata = {}
 
         if self.comm is not None:
             reset_result = self.comm.reset(task_spec.scene_id)
@@ -108,6 +118,8 @@ class SocialEmbodiedEnv:
 
             if task_spec.task_family == "ambiguous_reference":
                 self.task_spec = self._materialize_ambiguous_reference(task_spec)
+                if self.config.controlled_layout:
+                    self._apply_controlled_layout()
 
         self.events = self._initial_events(self.task_spec)
 
@@ -151,12 +163,14 @@ class SocialEmbodiedEnv:
     def _observe(self, metadata: dict[str, Any] | None = None) -> Observation:
         assert self.task_spec is not None
         fpv_images = self._capture_fpv_images()
+        debug_images = self._capture_debug_images()
         return build_observation(
             step_id=self.step_id,
             task_spec=self.task_spec,
             events=self.events,
             last_action=self.last_action,
             fpv_images=fpv_images,
+            debug_images=debug_images,
             scene_graph=self.scene_graph,
             metadata=self._observation_metadata(metadata),
         )
@@ -209,10 +223,13 @@ class SocialEmbodiedEnv:
         return self.static_camera_count + character_index * len(self.character_camera_names) + offset
 
     def _capture_fpv_images(self) -> list[Any]:
-        if not self.config.capture_fpv or self.comm is None or self.t_fpv_camera_index is None:
+        if not self.config.capture_fpv or self.comm is None:
+            return []
+        camera_index = self.controlled_fpv_camera_index or self.t_fpv_camera_index
+        if camera_index is None:
             return []
         success, images = self.comm.camera_image(
-            [self.t_fpv_camera_index],
+            [camera_index],
             mode="normal",
             image_width=self.config.image_width,
             image_height=self.config.image_height,
@@ -221,6 +238,19 @@ class SocialEmbodiedEnv:
             return []
         return images
 
+    def _capture_debug_images(self) -> dict[str, list[Any]]:
+        if not self.config.capture_debug_cameras or self.comm is None or self.overview_camera_index is None:
+            return {}
+        success, images = self.comm.camera_image(
+            [self.overview_camera_index],
+            mode="normal",
+            image_width=self.config.image_width,
+            image_height=self.config.image_height,
+        )
+        if not success:
+            return {}
+        return {"overview": images}
+
     def _observation_metadata(self, metadata: dict[str, Any] | None) -> dict[str, Any]:
         result = dict(metadata or {})
         result.update(
@@ -228,8 +258,11 @@ class SocialEmbodiedEnv:
                 "static_camera_count": self.static_camera_count,
                 "character_camera_names": self.character_camera_names,
                 "t_fpv_camera_index": self.t_fpv_camera_index,
+                "controlled_fpv_camera_index": self.controlled_fpv_camera_index,
+                "overview_camera_index": self.overview_camera_index,
                 "executed_scripts": self.executed_scripts,
                 "reset_warning": self.reset_warning,
+                "layout": self.layout_metadata,
             }
         )
         return result
@@ -241,7 +274,7 @@ class SocialEmbodiedEnv:
         if len(candidates) < 2:
             return task_spec
 
-        selected = candidates[:2]
+        selected = self._select_nearby_pair(candidates)
         target = selected[-1]
         target_id = int(target["id"])
 
@@ -278,6 +311,160 @@ class SocialEmbodiedEnv:
                 candidates.append(node)
         candidates.sort(key=lambda node: (str(node.get("class_name")), int(node.get("id"))))
         return candidates
+
+    def _select_nearby_pair(self, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        same_class_pairs: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
+        any_pairs: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
+        for idx, left in enumerate(candidates):
+            for right in candidates[idx + 1 :]:
+                dist = self._distance_xz(self._node_center(left), self._node_center(right))
+                pair = (dist, left, right)
+                any_pairs.append(pair)
+                if left.get("class_name") == right.get("class_name"):
+                    same_class_pairs.append(pair)
+
+        pairs = same_class_pairs or any_pairs
+        if not pairs:
+            return candidates[:2]
+        _, left, right = min(pairs, key=lambda item: item[0])
+        return [left, right]
+
+    def _apply_controlled_layout(self) -> None:
+        if self.comm is None or self.task_spec is None:
+            return
+        target = self.task_spec.objects.get("target", {})
+        candidates = self.task_spec.objects.get("candidates", [])
+        target_id = target.get("id")
+        target_class = target.get("class_name")
+        if target_id is None or target_class is None or len(candidates) < 2:
+            return
+
+        candidate_nodes = {
+            int(node["id"]): node
+            for node in self._find_candidate_objects([str(item["class_name"]) for item in candidates])
+            if node.get("id") is not None
+        }
+        selected_nodes = [candidate_nodes.get(int(item["id"])) for item in candidates]
+        selected_nodes = [node for node in selected_nodes if node is not None]
+        target_node = candidate_nodes.get(int(target_id))
+        if not selected_nodes or target_node is None:
+            return
+
+        centers = [self._node_center(node) for node in selected_nodes]
+        center = [
+            sum(pos[0] for pos in centers) / len(centers),
+            0.0,
+            sum(pos[2] for pos in centers) / len(centers),
+        ]
+
+        t_pos = [center[0], 0.0, center[2] + 1.8]
+        e_pos = [center[0] + 1.4, 0.0, center[2] + 0.7]
+
+        t_move_success = self.comm.move_character(0, t_pos)
+        e_move_success = self.comm.move_character(1, e_pos)
+
+        orient_script = [
+            f"<char0> [lookat] <{target_class}> ({target_id}) | <char1> [lookat] <{target_class}> ({target_id})"
+        ]
+        orient_success, orient_message = self.comm.render_script(
+            orient_script,
+            recording=False,
+            skip_animation=True,
+            image_synthesis=[],
+            processing_time_limit=20,
+        )
+
+        self.layout_metadata = {
+            "candidate_ids": [item.get("id") for item in candidates],
+            "target_id": target_id,
+            "target_class": target_class,
+            "candidate_centers": {int(node["id"]): self._node_center(node) for node in selected_nodes},
+            "layout_center": center,
+            "target_agent_position": t_pos,
+            "environment_agent_position": e_pos,
+            "move_character_success": {"T": t_move_success, "E": e_move_success},
+            "orient_script": orient_script,
+            "orient_success": orient_success,
+            "orient_message": orient_message,
+        }
+
+        if self.config.capture_debug_cameras:
+            self._add_overview_camera(center)
+        if self.config.use_controlled_fpv_camera:
+            self._add_controlled_fpv_camera(t_pos, self._node_center(target_node))
+
+        if self.config.use_scene_graph:
+            graph_success, graph = self.comm.environment_graph()
+            if graph_success:
+                self.scene_graph = graph
+
+    def _add_controlled_fpv_camera(self, t_position: list[float], target_center: list[float]) -> None:
+        if self.comm is None:
+            return
+        success, camera_count = self.comm.camera_count()
+        if not success:
+            return
+        self.controlled_fpv_camera_index = int(camera_count)
+        camera_pos = [t_position[0], 1.45, t_position[2]]
+        rotation = self._look_at_euler(camera_pos, target_center)
+        add_success, add_message = self.comm.add_camera(
+            position=camera_pos,
+            rotation=rotation,
+            field_view=70,
+        )
+        self.layout_metadata["controlled_fpv_camera"] = {
+            "index": self.controlled_fpv_camera_index,
+            "position": camera_pos,
+            "rotation": rotation,
+            "success": add_success,
+            "message": add_message,
+        }
+
+    def _add_overview_camera(self, center: list[float]) -> None:
+        if self.comm is None:
+            return
+        success, camera_count = self.comm.camera_count()
+        if not success:
+            return
+        self.overview_camera_index = int(camera_count)
+        camera_pos = [center[0], 4.0, center[2] + 3.2]
+        rotation = self._look_at_euler(camera_pos, [center[0], 1.0, center[2]])
+        add_success, add_message = self.comm.add_camera(
+            position=camera_pos,
+            rotation=rotation,
+            field_view=65,
+        )
+        self.layout_metadata["overview_camera"] = {
+            "index": self.overview_camera_index,
+            "position": camera_pos,
+            "rotation": rotation,
+            "success": add_success,
+            "message": add_message,
+        }
+
+    @staticmethod
+    def _node_center(node: dict[str, Any]) -> list[float]:
+        bbox = node.get("bounding_box") or {}
+        center = bbox.get("center")
+        if center:
+            return [float(center[0]), float(center[1]), float(center[2])]
+        transform = node.get("obj_transform") or {}
+        position = transform.get("position") or [0.0, 0.0, 0.0]
+        return [float(position[0]), float(position[1]), float(position[2])]
+
+    @staticmethod
+    def _distance_xz(left: list[float], right: list[float]) -> float:
+        return math.sqrt((left[0] - right[0]) ** 2 + (left[2] - right[2]) ** 2)
+
+    @staticmethod
+    def _look_at_euler(position: list[float], target: list[float]) -> list[float]:
+        dx = target[0] - position[0]
+        dy = target[1] - position[1]
+        dz = target[2] - position[2]
+        horizontal = math.sqrt(dx * dx + dz * dz)
+        pitch = -math.degrees(math.atan2(dy, horizontal))
+        yaw = math.degrees(math.atan2(dx, dz))
+        return [pitch, yaw, 0.0]
 
     @staticmethod
     def _initial_events(task_spec: TaskSpec) -> list[Event]:

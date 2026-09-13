@@ -43,6 +43,7 @@ def build_observation(
     events: list[Event],
     last_action: Action | None = None,
     fpv_images: list[Any] | None = None,
+    debug_images: dict[str, list[Any]] | None = None,
     scene_graph: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> Observation:
@@ -51,6 +52,7 @@ def build_observation(
     return Observation(
         step_id=step_id,
         fpv_images=fpv_images or [],
+        debug_images=debug_images or {},
         events=events,
         last_action=last_action,
         visible_objects=visible_objects_from_graph(scene_graph),
@@ -58,4 +60,3 @@ def build_observation(
         task_prompt=task_spec.prompt,
         metadata=metadata or {},
     )
-

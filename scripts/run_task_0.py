@@ -17,14 +17,18 @@ from social_embodied.evaluation import run_episode
 from social_embodied.tasks import AmbiguousReferenceScorer, build_task_0_spec
 
 
-def save_fpv_images(result: Any, output_dir: Path) -> list[str]:
-    """Save every FPV image captured during an episode."""
+def save_debug_images(result: Any, output_dir: Path) -> list[str]:
+    """Save every captured FPV/debug image during an episode."""
 
     frames = [
-        (obs_idx, image_idx, image)
+        ("fpv", obs_idx, image_idx, image)
         for obs_idx, observation in enumerate(result.observations)
         for image_idx, image in enumerate(observation.fpv_images)
     ]
+    for obs_idx, observation in enumerate(result.observations):
+        for channel, images in observation.debug_images.items():
+            for image_idx, image in enumerate(images):
+                frames.append((channel, obs_idx, image_idx, image))
     if not frames:
         return []
 
@@ -37,12 +41,12 @@ def save_fpv_images(result: Any, output_dir: Path) -> list[str]:
     except ImportError as exc:
         raise RuntimeError("Saving FPV images requires pillow and numpy.") from exc
 
-    for obs_idx, image_idx, image in frames:
+    for channel, obs_idx, image_idx, image in frames:
         arr = np.asarray(image)
         if arr.ndim == 3 and arr.shape[-1] == 3:
             # VirtualHome decodes PNGs through OpenCV, so RGB frames arrive as BGR.
             arr = arr[:, :, ::-1]
-        path = output_dir / f"obs_{obs_idx:03d}_fpv_{image_idx:02d}.png"
+        path = output_dir / f"obs_{obs_idx:03d}_{channel}_{image_idx:02d}.png"
         Image.fromarray(arr).save(path)
         saved.append(str(path))
     return saved
@@ -69,7 +73,7 @@ def main() -> None:
     scorer = AmbiguousReferenceScorer()
 
     result = run_episode(env=env, agent=agent, task_spec=task_spec, scorer=scorer, max_steps=args.max_steps)
-    saved_fpv_paths = save_fpv_images(result, args.save_fpv_dir) if args.save_fpv_dir else []
+    saved_fpv_paths = save_debug_images(result, args.save_fpv_dir) if args.save_fpv_dir else []
     payload = {
         "metrics": result.metrics,
         "saved_fpv_paths": saved_fpv_paths,
@@ -84,6 +88,9 @@ def main() -> None:
         ],
         "final_observation": {
             "num_fpv_images": len(result.observations[-1].fpv_images),
+            "debug_image_channels": {
+                channel: len(images) for channel, images in result.observations[-1].debug_images.items()
+            },
             "num_visible_objects": len(result.observations[-1].visible_objects),
             "metadata": result.observations[-1].metadata,
         },

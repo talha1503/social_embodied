@@ -40,6 +40,7 @@ class Observation:
     step_id: int
     timestamp: float | None = None
     fpv_images: list[Any] = field(default_factory=list)
+    debug_images: dict[str, list[Any]] = field(default_factory=dict)
     events: list[Event] = field(default_factory=list)
     last_action: "Action | None" = None
     visible_objects: list[ObjectRef] = field(default_factory=list)
@@ -85,4 +86,3 @@ class TaskSpec:
     e_behavior: dict[str, Any] = field(default_factory=dict)
     success: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
-
