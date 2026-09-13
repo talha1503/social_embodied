@@ -6,50 +6,15 @@ import json
 import sys
 from pathlib import Path
 import argparse
-from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from social_embodied.agents import SocialCueOracleAgent
+from social_embodied.debugging import write_episode_trace
 from social_embodied.envs import SocialEmbodiedEnv, VirtualHomeConfig
 from social_embodied.evaluation import run_episode
 from social_embodied.tasks import AmbiguousReferenceScorer, build_task_0_spec
-
-
-def save_debug_images(result: Any, output_dir: Path) -> list[str]:
-    """Save every captured FPV/debug image during an episode."""
-
-    frames = [
-        ("fpv", obs_idx, image_idx, image)
-        for obs_idx, observation in enumerate(result.observations)
-        for image_idx, image in enumerate(observation.fpv_images)
-    ]
-    for obs_idx, observation in enumerate(result.observations):
-        for channel, images in observation.debug_images.items():
-            for image_idx, image in enumerate(images):
-                frames.append((channel, obs_idx, image_idx, image))
-    if not frames:
-        return []
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    saved: list[str] = []
-
-    try:
-        from PIL import Image
-        import numpy as np
-    except ImportError as exc:
-        raise RuntimeError("Saving FPV images requires pillow and numpy.") from exc
-
-    for channel, obs_idx, image_idx, image in frames:
-        arr = np.asarray(image)
-        if arr.ndim == 3 and arr.shape[-1] == 3:
-            # VirtualHome decodes PNGs through OpenCV, so RGB frames arrive as BGR.
-            arr = arr[:, :, ::-1]
-        path = output_dir / f"obs_{obs_idx:03d}_{channel}_{image_idx:02d}.png"
-        Image.fromarray(arr).save(path)
-        saved.append(str(path))
-    return saved
 
 
 def main() -> None:
@@ -57,7 +22,13 @@ def main() -> None:
     parser.add_argument("--connect", action="store_true", help="Connect to a running VirtualHome Unity simulator.")
     parser.add_argument("--port", default="8080", help="Unity simulator HTTP port.")
     parser.add_argument("--no-fpv", action="store_true", help="Disable FPV image capture.")
-    parser.add_argument("--save-fpv-dir", type=Path, help="Directory for captured FPV debug images.")
+    parser.add_argument("--debug-dir", type=Path, default=Path("debug"), help="Root directory for local debug traces.")
+    parser.add_argument("--debug-run-name", help="Optional debug run folder name.")
+    parser.add_argument(
+        "--save-fpv-dir",
+        type=Path,
+        help="Deprecated alias for --debug-dir; writes a full trace, not only FPV images.",
+    )
     parser.add_argument("--max-steps", type=int, default=10)
     args = parser.parse_args()
 
@@ -73,10 +44,11 @@ def main() -> None:
     scorer = AmbiguousReferenceScorer()
 
     result = run_episode(env=env, agent=agent, task_spec=task_spec, scorer=scorer, max_steps=args.max_steps)
-    saved_fpv_paths = save_debug_images(result, args.save_fpv_dir) if args.save_fpv_dir else []
+    debug_root = args.save_fpv_dir or args.debug_dir
+    debug_trace = write_episode_trace(result, debug_root, run_name=args.debug_run_name)
     payload = {
         "metrics": result.metrics,
-        "saved_fpv_paths": saved_fpv_paths,
+        "debug_trace": debug_trace,
         "actions": [
             {
                 "type": action.action_type,

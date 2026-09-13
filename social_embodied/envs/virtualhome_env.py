@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from dataclasses import replace
 import math
@@ -260,9 +261,9 @@ class SocialEmbodiedEnv:
                 "t_fpv_camera_index": self.t_fpv_camera_index,
                 "controlled_fpv_camera_index": self.controlled_fpv_camera_index,
                 "overview_camera_index": self.overview_camera_index,
-                "executed_scripts": self.executed_scripts,
+                "executed_scripts": copy.deepcopy(self.executed_scripts),
                 "reset_warning": self.reset_warning,
-                "layout": self.layout_metadata,
+                "layout": copy.deepcopy(self.layout_metadata),
             }
         )
         return result

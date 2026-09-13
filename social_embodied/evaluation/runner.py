@@ -44,8 +44,8 @@ def run_episode(
         actions.append(action)
 
         result = env.step(action)
-        scorer.update(observation, action)
         observation = result.observation
+        scorer.update(observation, action)
         observations.append(observation)
 
         if result.done:
