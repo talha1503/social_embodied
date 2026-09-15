@@ -21,6 +21,7 @@ outputs/
 debug/
 runs/
 artifacts/
+port_*.txt
 *.mp4
 *.mov
 
