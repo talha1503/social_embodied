@@ -34,4 +34,3 @@ class RandomAgent:
                 )
             )
         return self._rng.choice(candidates)
-

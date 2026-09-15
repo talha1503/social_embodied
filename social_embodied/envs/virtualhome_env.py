@@ -695,33 +695,88 @@ class SocialEmbodiedEnv:
         if self.comm is None or self.task_spec is None:
             return
 
-        cue_scripts: list[dict[str, str]] = []
+        records: list[dict[str, Any]] = []
         if self.task_spec.e_behavior.get("gaze_visible"):
-            cue_scripts.append({"cue": "gaze", "script": f"<char1> [lookat] <{target_class}> ({target_id})"})
+            records.append(self._apply_head_gaze_cue(target_class=target_class, target_id=target_id))
 
         gesture = str(self.task_spec.e_behavior.get("gesture") or "").lower()
         if self.task_spec.e_behavior.get("gesture_visible") and gesture in {"point", "pointat", "point_at"}:
-            cue_scripts.append({"cue": "gesture", "script": f"<char1> [pointat] <{target_class}> ({target_id})"})
+            records.append(
+                self._render_visible_cue_script(
+                    cue="gesture",
+                    script=f"<char1> [pointat] <{target_class}> ({target_id})",
+                )
+            )
 
-        if not cue_scripts:
+        if not records:
             self.layout_metadata["visible_social_cues"] = {"records": [], "success": None}
             return
-
-        records = []
-        for cue_script in cue_scripts:
-            success, message = self.comm.render_script(
-                [cue_script["script"]],
-                recording=False,
-                skip_animation=True,
-                image_synthesis=[],
-                processing_time_limit=20,
-            )
-            records.append({**cue_script, "success": success, "message": message})
 
         self.layout_metadata["visible_social_cues"] = {
             "records": records,
             "success": all(record["success"] for record in records),
         }
+
+    def _apply_head_gaze_cue(self, *, target_class: str, target_id: int) -> dict[str, Any]:
+        assert self.comm is not None
+        assert self.task_spec is not None
+
+        gaze_config = self.task_spec.e_behavior.get("gaze", {})
+        if not isinstance(gaze_config, dict):
+            gaze_config = {}
+
+        method = str(gaze_config.get("method", "head_gaze")).lower()
+        if method in {"head_gaze", "head", "direct"} and hasattr(self.comm, "set_head_gaze"):
+            try:
+                success, message = self.comm.set_head_gaze(
+                    char_index=int(gaze_config.get("char_index", 1)),
+                    target_object_id=target_id,
+                    weight=float(gaze_config.get("weight", 1.0)),
+                    body_weight=float(gaze_config.get("body_weight", 0.0)),
+                    head_weight=float(gaze_config.get("head_weight", 1.0)),
+                    eyes_weight=float(gaze_config.get("eyes_weight", 0.0)),
+                    clamp_weight=float(gaze_config.get("clamp_weight", 0.5)),
+                    blend_speed=float(gaze_config.get("blend_speed", 6.0)),
+                    duration=float(self.task_spec.e_behavior.get("gaze_duration") or gaze_config.get("duration") or -1.0),
+                )
+            except Exception as exc:
+                success = False
+                message = f"set_head_gaze failed: {exc}"
+
+            record = {
+                "cue": "gaze",
+                "method": "head_gaze",
+                "target_class": target_class,
+                "target_id": target_id,
+                "success": success,
+                "message": message,
+            }
+            if success or not bool(gaze_config.get("fallback_to_script", True)):
+                return record
+
+            fallback = self._render_visible_cue_script(
+                cue="gaze",
+                script=f"<char1> [lookat] <{target_class}> ({target_id})",
+            )
+            fallback["fallback_from"] = record
+            return fallback
+
+        return self._render_visible_cue_script(
+            cue="gaze",
+            script=f"<char1> [lookat] <{target_class}> ({target_id})",
+        )
+
+    def _render_visible_cue_script(self, *, cue: str, script: str) -> dict[str, Any]:
+        assert self.comm is not None
+
+        success, message = self.comm.render_script(
+            [script],
+            recording=False,
+            skip_animation=True,
+            image_synthesis=[],
+            processing_time_limit=20,
+        )
+        return {"cue": cue, "method": "render_script", "script": script, "success": success, "message": message}
 
     def _agent_config(self, agent_role: str, key: str, default: str) -> str:
         if self.task_spec is None:

@@ -23,7 +23,13 @@ The first implemented layout mode is `controlled_pair`. It places T and E at off
 
 Debug traces capture both normal RGB frames and `seg_inst` frames. The backend uses `instance_colors()` to estimate whether the target/candidate objects are visible in FPV and overview cameras.
 
-Visible social cues currently use VirtualHome script primitives:
+Visible social cues use a direct Unity endpoint for gaze when available:
+
+- gaze: `set_head_gaze(char_index=1, target_object_id=<target_id>)`
+
+The direct gaze endpoint rotates the humanoid head/eye IK toward the target while leaving body motion to the normal layout/orientation code. The nested `e_behavior.gaze` object can include `method: "head_gaze"`, `char_index`, `weight`, `body_weight`, `head_weight`, `eyes_weight`, `clamp_weight`, `blend_speed`, `duration`, and `fallback_to_script`.
+
+If the running Unity build does not expose the custom endpoint yet, the adapter can fall back to VirtualHome script primitives:
 
 - gaze: `<char1> [lookat] <object> (id)`
 - gesture: `<char1> [pointat] <object> (id)`

@@ -2,7 +2,7 @@
   "task_id": "ambiguous_reference_0000",
   "task_family": "ambiguous_reference",
   "scene_id": 4,
-  "prompt": "E asks T to bring the intended object, but language alone is ambiguous. T must use E's gaze and pointing cue.",
+  "prompt": "E asks T to bring the intended object, but language alone is ambiguous. T must use E's gaze cue.",
   "objects": {
     "candidates": [
       {
@@ -67,12 +67,19 @@
     "gaze": {
       "target": "target",
       "visible": true,
-      "duration": 1.5
+      "duration": 1.5,
+      "method": "head_gaze",
+      "char_index": 1,
+      "body_weight": 0.0,
+      "head_weight": 1.0,
+      "eyes_weight": 0.0,
+      "clamp_weight": 0.5,
+      "fallback_to_script": true
     },
     "gesture": {
-      "type": "pointat",
+      "type": "none",
       "target": "target",
-      "visible": true,
+      "visible": false,
       "duration": 1.0,
       "intensity": 0.8
     }
@@ -83,7 +90,7 @@
     "require_final_hold": true
   },
   "metadata": {
-    "requires": ["fpv", "speech", "gaze", "gesture", "object_interaction"],
+    "requires": ["fpv", "speech", "gaze", "object_interaction"],
     "split": "dev",
     "notes": "Scene 4 fixed ids are used for the default dev seed so initial FPV visibility and final object interaction are reproducible."
   }
