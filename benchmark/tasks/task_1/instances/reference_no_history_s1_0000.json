@@ -1,0 +1,116 @@
+{
+  "task_id": "reference_no_history_s1_0000",
+  "task_family": "ambiguous_reference",
+  "scene_id": 4,
+  "prompt": "E says: Bring me the mug. E is watching TV. There are two mugs in the room; one is close to E and one is farther from E.",
+  "objects": {
+    "candidates": [
+      {
+        "id": 1001,
+        "class_name": "mug",
+        "label": "dry_run_close_mug",
+        "center": [0.0, 1.0, 0.0]
+      },
+      {
+        "id": 1002,
+        "class_name": "mug",
+        "label": "dry_run_far_mug",
+        "center": [2.0, 1.0, 0.0]
+      }
+    ],
+    "target": {
+      "id": 1002,
+      "class_name": "mug",
+      "label": "dry_run_far_mug"
+    },
+    "distractors": {
+      "tv": {
+        "id": 2000,
+        "class_name": "tv",
+        "label": "dry_run_tv"
+      }
+    }
+  },
+  "agents": {
+    "target": {
+      "agent_id": "T",
+      "character": "Chars/Male1",
+      "initial_room": "livingroom"
+    },
+    "environment": {
+      "agent_id": "E",
+      "character": "Chars/Female2",
+      "initial_room": "livingroom"
+    }
+  },
+  "object_selection": {
+    "mode": "auto_nearby_pair",
+    "candidate_classes": ["mug"],
+    "fallback_classes": [],
+    "require_same_class": true,
+    "pair_strategy": "min_distance",
+    "min_pair_distance": 0.4,
+    "max_pair_distance": 1.6,
+    "target_relation": "farthest_from_environment_agent"
+  },
+  "layout": {
+    "mode": "controlled_pair",
+    "target_agent_offset": [0.0, 0.0, 2.2],
+    "environment_agent_anchor": {
+      "type": "candidate",
+      "candidate_index": 0,
+      "offset": [-0.75, 0.0, 0.0]
+    },
+    "orient_agents_to_target": false,
+    "controlled_fpv_camera": {
+      "enabled": true,
+      "height": 1.75,
+      "position_offset": [0.0, 0.0, -0.75],
+      "look_at": "candidate_center",
+      "look_at_height": 1.15,
+      "field_view": 115
+    },
+    "overview_camera": {
+      "enabled": true,
+      "offset": [0.0, 4.2, 3.5],
+      "look_at_offset": [0.0, 1.0, 0.0],
+      "field_view": 70
+    }
+  },
+  "e_behavior": {
+    "speech": "Bring me the mug.",
+    "gaze": {
+      "target": {
+        "class_names": ["tv"],
+        "selection": "nearest_to_candidates",
+        "fallback": {
+          "id": 2000,
+          "class_name": "tv"
+        }
+      },
+      "visible": true,
+      "duration": -1.0,
+      "method": "head_gaze",
+      "char_index": 1,
+      "body_weight": 0.0,
+      "head_weight": 1.0,
+      "eyes_weight": 0.0,
+      "clamp_weight": 0.5,
+      "fallback_to_script": true
+    }
+  },
+  "success": {
+    "target_object_id": null,
+    "acceptable_actions": ["pick_up", "give_to"],
+    "require_final_hold": true,
+    "expected_reference_rule": "farthest_from_environment_agent",
+    "expected_utterance_on_ambiguity": false
+  },
+  "metadata": {
+    "task_number": "1.1",
+    "scenario": "without_history_1",
+    "requires": ["fpv", "speech", "gaze", "object_interaction", "spatial_reference"],
+    "split": "dev",
+    "notes": "Scenario 1.1 resolves the ambiguous mug reference by E-centered distance, while E's current gaze remains on the TV."
+  }
+}

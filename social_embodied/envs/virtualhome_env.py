@@ -449,6 +449,10 @@ class SocialEmbodiedEnv:
                 if int(node["id"]) == int(target_id_config):
                     target_index = idx
                     break
+        else:
+            relation_index = self._target_index_from_relation(task_spec, selected, selection)
+            if relation_index is not None:
+                target_index = relation_index
         target_index = max(0, min(target_index, len(selected) - 1))
         target = selected[target_index]
         target_id = int(target["id"])
@@ -465,11 +469,11 @@ class SocialEmbodiedEnv:
                 "label": f"{target['class_name']}_{target_id}",
             },
         }
-        e_behavior = {
-            **task_spec.e_behavior,
-            "gaze_target_id": target_id,
-            "gesture_target_id": target_id,
-        }
+        e_behavior = dict(task_spec.e_behavior)
+        if e_behavior.get("gaze_target_id") is None and e_behavior.get("gaze_visible"):
+            e_behavior["gaze_target_id"] = target_id
+        if e_behavior.get("gesture_target_id") is None and e_behavior.get("gesture_visible"):
+            e_behavior["gesture_target_id"] = target_id
         success = {
             **task_spec.success,
             "target_object_id": target_id,
@@ -498,8 +502,10 @@ class SocialEmbodiedEnv:
 
         e_behavior = dict(task_spec.e_behavior)
         for key in ("gaze_target_id", "gesture_target_id"):
-            if e_behavior.get(key) == "target":
-                e_behavior[key] = int(target_id)
+            resolved = self._resolve_object_target_reference(e_behavior.get(key), task_spec)
+            if resolved is not None:
+                e_behavior[key] = int(resolved["id"])
+                e_behavior[f"{key}_class_name"] = str(resolved["class_name"])
 
         success = dict(task_spec.success)
         if success.get("target_object_id") is None:
@@ -525,7 +531,7 @@ class SocialEmbodiedEnv:
     ) -> list[dict[str, Any]]:
         selection = selection or {}
         mode = selection.get("mode", "auto_nearby_pair")
-        if mode not in {"auto_nearby_pair", "fixed_ids"}:
+        if mode not in {"auto_nearby_pair", "auto_spread_pair", "fixed_ids"}:
             raise ValueError(f"Unsupported object_selection mode: {mode}")
 
         same_class_pairs: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
@@ -543,8 +549,60 @@ class SocialEmbodiedEnv:
             pairs = any_pairs
         if not pairs:
             return candidates[:2]
-        _, left, right = min(pairs, key=lambda item: item[0])
+
+        min_pair_distance = selection.get("min_pair_distance")
+        if min_pair_distance is not None:
+            filtered = [pair for pair in pairs if pair[0] >= float(min_pair_distance)]
+            if filtered:
+                pairs = filtered
+        max_pair_distance = selection.get("max_pair_distance")
+        if max_pair_distance is not None:
+            filtered = [pair for pair in pairs if pair[0] <= float(max_pair_distance)]
+            if filtered:
+                pairs = filtered
+
+        pair_strategy = str(selection.get("pair_strategy") or "").lower()
+        if mode == "auto_spread_pair" or pair_strategy in {"max_distance", "spread", "farthest"}:
+            _, left, right = max(pairs, key=lambda item: item[0])
+        else:
+            _, left, right = min(pairs, key=lambda item: item[0])
         return [left, right]
+
+    def _target_index_from_relation(
+        self,
+        task_spec: TaskSpec,
+        selected: list[dict[str, Any]],
+        selection: dict[str, Any],
+    ) -> int | None:
+        relation = str(selection.get("target_relation") or "").lower()
+        if not relation:
+            return None
+
+        if relation not in {
+            "farthest_from_environment_agent",
+            "farthest_from_e",
+            "closest_to_environment_agent",
+            "closest_to_e",
+        }:
+            raise ValueError(f"Unsupported target_relation: {relation}")
+
+        layout = task_spec.metadata.get("layout", {})
+        centers = [self._node_center(node) for node in selected]
+        pair_center = self._mean_position(centers)
+        environment_position = self._layout_agent_position(
+            "environment",
+            layout,
+            selected,
+            pair_center,
+            default_offset=[1.4, 0.0, 0.7],
+        )
+        distances = [
+            self._distance_xz(environment_position, self._node_center(node))
+            for node in selected
+        ]
+        if relation in {"farthest_from_environment_agent", "farthest_from_e"}:
+            return max(range(len(selected)), key=lambda idx: distances[idx])
+        return min(range(len(selected)), key=lambda idx: distances[idx])
 
     def _apply_controlled_layout(self) -> None:
         if self.comm is None or self.task_spec is None:
@@ -568,18 +626,23 @@ class SocialEmbodiedEnv:
             return
 
         centers = [self._node_center(node) for node in selected_nodes]
-        center = [
-            sum(pos[0] for pos in centers) / len(centers),
-            0.0,
-            sum(pos[2] for pos in centers) / len(centers),
-        ]
+        center = self._mean_position(centers)
 
         layout = self.task_spec.metadata.get("layout", {})
-        t_offset = self._vector_config(layout, "target_agent_offset", [0.0, 0.0, 1.8])
-        e_offset = self._vector_config(layout, "environment_agent_offset", [1.4, 0.0, 0.7])
-
-        t_pos = [center[0] + t_offset[0], t_offset[1], center[2] + t_offset[2]]
-        e_pos = [center[0] + e_offset[0], e_offset[1], center[2] + e_offset[2]]
+        t_pos = self._layout_agent_position(
+            "target",
+            layout,
+            selected_nodes,
+            center,
+            default_offset=[0.0, 0.0, 1.8],
+        )
+        e_pos = self._layout_agent_position(
+            "environment",
+            layout,
+            selected_nodes,
+            center,
+            default_offset=[1.4, 0.0, 0.7],
+        )
 
         t_move_success = self.comm.move_character(0, t_pos)
         e_move_success = self.comm.move_character(1, e_pos)
@@ -604,6 +667,9 @@ class SocialEmbodiedEnv:
             "target_id": target_id,
             "target_class": target_class,
             "candidate_centers": {int(node["id"]): self._node_center(node) for node in selected_nodes},
+            "candidate_distances_to_E": {
+                int(node["id"]): self._distance_xz(e_pos, self._node_center(node)) for node in selected_nodes
+            },
             "layout_center": center,
             "target_agent_position": t_pos,
             "environment_agent_position": e_pos,
@@ -611,9 +677,10 @@ class SocialEmbodiedEnv:
             "orient_script": orient_script,
             "orient_success": orient_success,
             "orient_message": orient_message,
+            "target_relation": self.task_spec.metadata.get("object_selection", {}).get("target_relation"),
         }
 
-        self._apply_visible_social_cues(target_class=str(target_class), target_id=int(target_id))
+        self._apply_visible_social_cues()
 
         overview_config = layout.get("overview_camera", {})
         if self.config.capture_debug_cameras and overview_config.get("enabled", True):
@@ -642,7 +709,12 @@ class SocialEmbodiedEnv:
         fpv_config = self.task_spec.metadata.get("layout", {}).get("controlled_fpv_camera", {}) if self.task_spec else {}
         camera_height = float(fpv_config.get("height", 1.45))
         field_view = float(fpv_config.get("field_view", 70))
-        camera_pos = [t_position[0], camera_height, t_position[2]]
+        position_offset = self._vector_config(fpv_config, "position_offset", [0.0, 0.0, 0.0])
+        camera_pos = [
+            t_position[0] + position_offset[0],
+            camera_height + position_offset[1],
+            t_position[2] + position_offset[2],
+        ]
         if fpv_config.get("look_at") == "candidate_center":
             look_at_height = float(fpv_config.get("look_at_height", 0.85))
             look_at = [candidate_center[0], look_at_height, candidate_center[2]]
@@ -691,20 +763,34 @@ class SocialEmbodiedEnv:
             "message": add_message,
         }
 
-    def _apply_visible_social_cues(self, *, target_class: str, target_id: int) -> None:
+    def _apply_visible_social_cues(self) -> None:
         if self.comm is None or self.task_spec is None:
             return
 
         records: list[dict[str, Any]] = []
-        if self.task_spec.e_behavior.get("gaze_visible"):
-            records.append(self._apply_head_gaze_cue(target_class=target_class, target_id=target_id))
+        gaze_target_id = self.task_spec.e_behavior.get("gaze_target_id")
+        if self.task_spec.e_behavior.get("gaze_visible") and gaze_target_id is not None:
+            records.append(
+                self._apply_head_gaze_cue(
+                    target_class=self._object_class_for_id(int(gaze_target_id)),
+                    target_id=int(gaze_target_id),
+                )
+            )
 
         gesture = str(self.task_spec.e_behavior.get("gesture") or "").lower()
-        if self.task_spec.e_behavior.get("gesture_visible") and gesture in {"point", "pointat", "point_at"}:
+        gesture_target_id = self.task_spec.e_behavior.get("gesture_target_id")
+        if (
+            self.task_spec.e_behavior.get("gesture_visible")
+            and gesture in {"point", "pointat", "point_at"}
+            and gesture_target_id is not None
+        ):
             records.append(
                 self._render_visible_cue_script(
                     cue="gesture",
-                    script=f"<char1> [pointat] <{target_class}> ({target_id})",
+                    script=(
+                        f"<char1> [pointat] "
+                        f"<{self._object_class_for_id(int(gesture_target_id))}> ({int(gesture_target_id)})"
+                    ),
                 )
             )
 
@@ -778,6 +864,158 @@ class SocialEmbodiedEnv:
         )
         return {"cue": cue, "method": "render_script", "script": script, "success": success, "message": message}
 
+    def _resolve_object_target_reference(
+        self,
+        reference: Any,
+        task_spec: TaskSpec,
+    ) -> dict[str, Any] | None:
+        if reference is None:
+            return None
+
+        if isinstance(reference, str):
+            if reference == "target":
+                target = task_spec.objects.get("target", {})
+                if target.get("id") is not None:
+                    return {"id": int(target["id"]), "class_name": str(target.get("class_name", "object"))}
+            if reference.isdigit():
+                object_id = int(reference)
+                return {"id": object_id, "class_name": self._object_class_for_id(object_id, task_spec=task_spec)}
+            named = self._named_object_reference(reference, task_spec)
+            if named is not None:
+                return named
+            return None
+
+        if isinstance(reference, int):
+            return {"id": reference, "class_name": self._object_class_for_id(reference, task_spec=task_spec)}
+
+        if isinstance(reference, dict):
+            fallback = reference.get("fallback")
+            if not self.scene_graph and isinstance(fallback, dict) and fallback.get("id") is not None:
+                return {"id": int(fallback["id"]), "class_name": str(fallback.get("class_name", "object"))}
+
+            class_names = reference.get("class_names")
+            if class_names is None and reference.get("class_name") is not None:
+                class_names = [reference["class_name"]]
+            if isinstance(class_names, str):
+                class_names = [class_names]
+            if not class_names:
+                return None
+
+            candidates = self._find_candidate_objects([str(item) for item in class_names])
+            if not candidates:
+                if isinstance(fallback, dict) and fallback.get("id") is not None:
+                    return {"id": int(fallback["id"]), "class_name": str(fallback.get("class_name", "object"))}
+                return None
+
+            selection = str(reference.get("selection", "first")).lower()
+            if selection in {"first", "lowest_id"}:
+                selected = min(candidates, key=lambda node: int(node["id"]))
+            elif selection in {"nearest_to_candidates", "nearest_to_candidate_center"}:
+                anchor = self._candidate_anchor_position(task_spec)
+                selected = min(candidates, key=lambda node: self._distance_xz(anchor, self._node_center(node)))
+            elif selection in {"nearest_to_environment_agent", "nearest_to_e"}:
+                anchor = self._planned_environment_position(task_spec)
+                selected = min(candidates, key=lambda node: self._distance_xz(anchor, self._node_center(node)))
+            else:
+                raise ValueError(f"Unsupported target reference selection: {selection}")
+
+            return {"id": int(selected["id"]), "class_name": str(selected.get("class_name", "object"))}
+
+        return None
+
+    def _named_object_reference(self, name: str, task_spec: TaskSpec) -> dict[str, Any] | None:
+        direct = task_spec.objects.get(name)
+        if isinstance(direct, dict) and direct.get("id") is not None:
+            return {"id": int(direct["id"]), "class_name": str(direct.get("class_name", "object"))}
+
+        distractors = task_spec.objects.get("distractors", {})
+        if isinstance(distractors, dict):
+            distractor = distractors.get(name)
+            if isinstance(distractor, dict) and distractor.get("id") is not None:
+                return {"id": int(distractor["id"]), "class_name": str(distractor.get("class_name", "object"))}
+
+        for obj in task_spec.objects.get("candidates", []):
+            if not isinstance(obj, dict) or obj.get("id") is None:
+                continue
+            labels = {str(obj.get("label")), str(obj.get("display_name")), str(obj.get("class_name"))}
+            if name in labels:
+                return {"id": int(obj["id"]), "class_name": str(obj.get("class_name", "object"))}
+        return None
+
+    def _planned_environment_position(self, task_spec: TaskSpec) -> list[float]:
+        candidates = task_spec.objects.get("candidates", [])
+        nodes_by_id = self._nodes_by_id()
+        selected_nodes = [
+            nodes_by_id.get(int(item["id"]))
+            for item in candidates
+            if isinstance(item, dict) and item.get("id") is not None
+        ]
+        selected_nodes = [node for node in selected_nodes if node is not None]
+        if not selected_nodes:
+            return [0.0, 0.0, 0.0]
+        center = self._mean_position([self._node_center(node) for node in selected_nodes])
+        return self._layout_agent_position(
+            "environment",
+            task_spec.metadata.get("layout", {}),
+            selected_nodes,
+            center,
+            default_offset=[1.4, 0.0, 0.7],
+        )
+
+    def _candidate_anchor_position(self, task_spec: TaskSpec) -> list[float]:
+        candidates = task_spec.objects.get("candidates", [])
+        nodes_by_id = self._nodes_by_id()
+        centers = [
+            self._node_center(nodes_by_id[int(item["id"])])
+            for item in candidates
+            if isinstance(item, dict) and item.get("id") is not None and int(item["id"]) in nodes_by_id
+        ]
+        if centers:
+            return self._mean_position(centers)
+
+        dry_centers = [
+            item.get("center")
+            for item in candidates
+            if isinstance(item, dict) and isinstance(item.get("center"), list) and len(item["center"]) == 3
+        ]
+        if dry_centers:
+            return self._mean_position(dry_centers)
+        return [0.0, 0.0, 0.0]
+
+    def _object_class_for_id(self, object_id: int, task_spec: TaskSpec | None = None) -> str:
+        for node in (self.scene_graph or {}).get("nodes", []):
+            if node.get("id") is not None and int(node["id"]) == int(object_id):
+                return str(node.get("class_name", "object"))
+
+        spec = task_spec or self.task_spec
+        if spec is not None:
+            found = self._object_class_for_id_in_spec(int(object_id), spec.objects)
+            if found is not None:
+                return found
+        return "object"
+
+    def _object_class_for_id_in_spec(self, object_id: int, value: Any) -> str | None:
+        if isinstance(value, dict):
+            if value.get("id") is not None and int(value["id"]) == object_id:
+                return str(value.get("class_name", "object"))
+            for item in value.values():
+                found = self._object_class_for_id_in_spec(object_id, item)
+                if found is not None:
+                    return found
+        elif isinstance(value, list):
+            for item in value:
+                found = self._object_class_for_id_in_spec(object_id, item)
+                if found is not None:
+                    return found
+        return None
+
+    def _nodes_by_id(self) -> dict[int, dict[str, Any]]:
+        return {
+            int(node["id"]): node
+            for node in (self.scene_graph or {}).get("nodes", [])
+            if node.get("id") is not None
+        }
+
     def _agent_config(self, agent_role: str, key: str, default: str) -> str:
         if self.task_spec is None:
             return default
@@ -791,6 +1029,36 @@ class SocialEmbodiedEnv:
         if not isinstance(value, (list, tuple)) or len(value) != 3:
             return default
         return [float(value[0]), float(value[1]), float(value[2])]
+
+    def _layout_agent_position(
+        self,
+        agent_role: str,
+        layout: dict[str, Any],
+        selected_nodes: list[dict[str, Any]],
+        center: list[float],
+        *,
+        default_offset: list[float],
+    ) -> list[float]:
+        anchor = layout.get(f"{agent_role}_agent_anchor", {}) if isinstance(layout, dict) else {}
+        if isinstance(anchor, dict) and str(anchor.get("type", "")).lower() == "candidate":
+            candidate_index = int(anchor.get("candidate_index", 0))
+            candidate_index = max(0, min(candidate_index, len(selected_nodes) - 1))
+            base = self._node_center(selected_nodes[candidate_index])
+            offset = self._vector_config(anchor, "offset", [0.0, 0.0, 0.0])
+            return [base[0] + offset[0], offset[1], base[2] + offset[2]]
+
+        offset = self._vector_config(layout, f"{agent_role}_agent_offset", default_offset)
+        return [center[0] + offset[0], offset[1], center[2] + offset[2]]
+
+    @staticmethod
+    def _mean_position(positions: list[list[float]]) -> list[float]:
+        if not positions:
+            return [0.0, 0.0, 0.0]
+        return [
+            sum(pos[0] for pos in positions) / len(positions),
+            sum(pos[1] for pos in positions) / len(positions),
+            sum(pos[2] for pos in positions) / len(positions),
+        ]
 
     @staticmethod
     def _node_center(node: dict[str, Any]) -> list[float]:
@@ -829,21 +1097,21 @@ class SocialEmbodiedEnv:
                 Event(
                     event_type="gaze",
                     actor="E",
-                    target_object_id=int(gaze_target),
+                    target_object_id=SocialEmbodiedEnv._optional_int(gaze_target),
                     start_time=0.0,
                     duration=task_spec.e_behavior.get("gaze_duration"),
                 )
             )
 
-        gesture = task_spec.e_behavior.get("gesture")
+        gesture = str(task_spec.e_behavior.get("gesture") or "").lower()
         gesture_target = task_spec.e_behavior.get("gesture_target_id")
-        if gesture:
+        if gesture and gesture not in {"none", "null", "false"}:
             events.append(
                 Event(
                     event_type="gesture",
                     actor="E",
                     content=gesture,
-                    target_object_id=int(gesture_target) if gesture_target is not None else None,
+                    target_object_id=SocialEmbodiedEnv._optional_int(gesture_target),
                     start_time=task_spec.e_behavior.get("gesture_start_time", 0.0),
                     duration=task_spec.e_behavior.get("gesture_duration"),
                     metadata={"intensity": task_spec.e_behavior.get("gesture_intensity")},
@@ -851,3 +1119,12 @@ class SocialEmbodiedEnv:
             )
 
         return events
+
+    @staticmethod
+    def _optional_int(value: Any) -> int | None:
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None

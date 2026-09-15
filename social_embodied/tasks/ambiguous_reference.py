@@ -13,12 +13,26 @@ from social_embodied.tasks.io import load_task_spec
 DEFAULT_TASK_0_INSTANCE = (
     Path(__file__).resolve().parents[2] / "benchmark" / "tasks" / "task_0" / "instances" / "ambiguous_reference_0000.json"
 )
+DEFAULT_TASK_1_1_INSTANCE = (
+    Path(__file__).resolve().parents[2]
+    / "benchmark"
+    / "tasks"
+    / "task_1"
+    / "instances"
+    / "reference_no_history_s1_0000.json"
+)
 
 
 def build_task_0_spec() -> TaskSpec:
     """Return the default JSON-backed Task 0 instance."""
 
     return load_task_spec(DEFAULT_TASK_0_INSTANCE)
+
+
+def build_task_1_1_spec() -> TaskSpec:
+    """Return Task 1.1: no-history reference ambiguity with E watching TV."""
+
+    return load_task_spec(DEFAULT_TASK_1_1_INSTANCE)
 
 
 @dataclass

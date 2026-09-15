@@ -60,6 +60,19 @@ social_env/bin/python scripts/launch_virtualhome_macos.py --fresh
 social_env/bin/python scripts/run_task_0.py --connect --max-steps 2 --debug-run-name task0_manual
 ```
 
+Run Task 1.1, the no-history "Bring me the mug" scenario where E watches TV
+and the target is the mug farther from E:
+
+```bash
+social_env/bin/python scripts/run_task_1.py --connect --port 8080 --max-steps 2 --debug-run-name task1_1_manual
+```
+
+The naive cue-following baseline can be run as a negative control:
+
+```bash
+social_env/bin/python scripts/run_task_1.py --connect --port 8080 --agent social-cue-oracle --max-steps 2 --debug-run-name task1_1_social_cue_baseline
+```
+
 Connected runs write local debug traces by default:
 
 ```text
