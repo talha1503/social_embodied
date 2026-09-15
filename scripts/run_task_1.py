@@ -11,7 +11,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from social_embodied.agents import SocialCueOracleAgent, TargetObjectOracleAgent
+from social_embodied.agents import ConstrainedJsonAgent, SocialCueOracleAgent, TargetObjectOracleAgent
 from social_embodied.debugging import write_episode_trace
 from social_embodied.envs import SocialEmbodiedEnv, VirtualHomeConfig
 from social_embodied.evaluation import run_episode
@@ -34,7 +34,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--agent",
-        choices=["target-oracle", "social-cue-oracle"],
+        choices=["target-oracle", "social-cue-oracle", "json-heuristic"],
         default="target-oracle",
         help="Baseline agent to run.",
     )
@@ -45,7 +45,12 @@ def main() -> None:
     args = parser.parse_args()
 
     task_spec = load_task_spec(args.task_instance) if args.task_instance else build_task_1_1_spec()
-    agent = TargetObjectOracleAgent() if args.agent == "target-oracle" else SocialCueOracleAgent()
+    if args.agent == "target-oracle":
+        agent = TargetObjectOracleAgent()
+    elif args.agent == "social-cue-oracle":
+        agent = SocialCueOracleAgent()
+    else:
+        agent = ConstrainedJsonAgent(name="task1_json_heuristic")
     env = SocialEmbodiedEnv(
         VirtualHomeConfig(
             connect=args.connect,
